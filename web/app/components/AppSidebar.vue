@@ -13,12 +13,16 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 
-// Використовуйте ref для стану, як ви це робите, але переконайтеся,
-// що він не змінюється асинхронно під час SSR.
+
 const isChatsOpen = ref(false);
 const isNotebooksOpen = ref(false);
 
-// Класи для іконки, винесені в обчислюване властивість для чистоти
+const route = useRoute()
+const isChatDisabled = computed(() => route.fullPath == "/chat")
+const isNotebookDisabled = computed(() => route.fullPath == "/notebooks")
+
+const router = useRouter();
+
 const chatsIconClasses = computed(() => [
   "transition-transform",
   "duration-300",
@@ -54,6 +58,8 @@ const notebooksIconClasses = computed(() => [
               </Button> </CollapsibleTrigger
             ><Button
               variant="default"
+              :disabled="isChatDisabled"
+              @click="() => router.push({ path : '/chat'})"
               class="text-white w-[40px] text-xl text-center flex items-center justify-center"
             >
               <p>+</p>
@@ -90,6 +96,8 @@ const notebooksIconClasses = computed(() => [
               </Button> </CollapsibleTrigger
             ><Button
               variant="default"
+              :disabled="isNotebookDisabled"
+              @click="() => router.push({ path : '/notebooks'})"
               class="text-white w-[40px] text-xl text-center flex items-center justify-center"
             >
               <p>+</p>

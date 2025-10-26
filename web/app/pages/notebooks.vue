@@ -1,0 +1,25 @@
+<script setup lang="ts">
+const isFileDialogOpen = ref(false);
+console.log(isFileDialogOpen)
+provide("isNotebookFileDialogOpen", isFileDialogOpen);
+</script>
+<template>
+  <div class="w-full h-dvh flex justify-center flex-wrap gap-2 p-24">
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookFileAddDialog></NotebookFileAddDialog>
+  </div>
+</template>
