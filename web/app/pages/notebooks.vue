@@ -20,6 +20,36 @@ provide("isNotebookFileDialogOpen", isFileDialogOpen);
     <NotebookCard></NotebookCard>
     <NotebookCard></NotebookCard>
     <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
+    <NotebookCard></NotebookCard>
     <NotebookFileAddDialog></NotebookFileAddDialog>
   </div>
 </template>
