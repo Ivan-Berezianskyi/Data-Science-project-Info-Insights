@@ -22,4 +22,11 @@ export default defineNuxtConfig({
      */
     componentDir: './components/ui'
   },
+  runtimeConfig: {
+    // Private keys (only available on server-side)
+    // Public keys (exposed to client-side)
+    public: {
+      apiBaseUrl: process.env.API_BASE_URL || 'http://localhost:8000',
+    },
+  },
 })

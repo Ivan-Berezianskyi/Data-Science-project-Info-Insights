@@ -12,8 +12,8 @@ const triggerLeft = computed(() => {
 
 <template>
   <SidebarTrigger
-    class="size-[40px] h-dvh fixed top-0 z-20 p-0 bg-gray-200 rounded-l-none flex transition-all duration-200"
-    :style="{ left: triggerLeft }"
+    class="size-[40px] fixed top-0 z-20 p-0 bg-gray-200 rounded-l-none flex transition-all duration-200"
+    :style="{ left: triggerLeft, height: '40px' }"
   />
 </template>
 
