@@ -25,5 +25,8 @@
     "typescript": "^5.9.3",
     "vue": "^3.5.22",
     "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
   }
 }

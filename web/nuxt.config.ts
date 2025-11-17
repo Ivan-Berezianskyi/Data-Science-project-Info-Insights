@@ -6,7 +6,7 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   css: ['~/assets/css/main.css'],
   nitro: {
-    preset: 'cloudflare_module',
+    preset: process.env.NITRO_PRESET || 'node-server',
   },
   vite: {
     plugins: [
@@ -20,7 +20,7 @@ export default defineNuxtConfig({
      * Directory that the component lives in.
      * @default "./components/ui"
      */
-    componentDir: './components/ui'
+    componentDir: './app/components/ui'
   },
   runtimeConfig: {
     // Private keys (only available on server-side)
