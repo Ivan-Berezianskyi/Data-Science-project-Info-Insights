@@ -12,7 +12,7 @@ def batch_generator(data, batch_size):
 class RAGService:
     def __init__(self):
         self.client = QdrantClient(":memory:")
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.api_key = ""
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY не встановлено в змінних оточення.")
         
@@ -52,10 +52,10 @@ class RAGService:
             is_separator_regex=False, 
         )
         chunks = text_splitter.split_text(data)
-        print(f"Текст розбито на {len(chunks)} чанків.")
+        #print(f"Текст розбито на {len(chunks)} чанків.")
 
         if not chunks:
-            print("Немає чанків для обробки.")
+            #print("Немає чанків для обробки.")
             return True
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_embed_model}:batchEmbedContents"
@@ -83,7 +83,7 @@ class RAGService:
                 response_data = response.json()
                 
                 embeddings = response_data.get('embeddings', [])
-                print(f"Отримано {len(embeddings)} ембедингів для пакету.")
+                #print(f"Отримано {len(embeddings)} ембедингів для пакету.")
 
                 for chunk_text, embedding in zip(chunk_batch, embeddings):
                     all_points_to_upsert.append(
@@ -95,11 +95,11 @@ class RAGService:
                     )
 
             except requests.exceptions.HTTPError as http_err:
-                print(f"HTTP помилка при отриманні ембедингів: {http_err}")
-                print(f"Відповідь: {response.text}")
+                #print(f"HTTP помилка при отриманні ембедингів: {http_err}")
+                #print(f"Відповідь: {response.text}")
                 continue # Пропускаємо цей пакет
             except Exception as err:
-                print(f"Інша помилка: {err}")
+                #print(f"Інша помилка: {err}")
                 continue
 
         if all_points_to_upsert:
@@ -108,7 +108,7 @@ class RAGService:
                 points=all_points_to_upsert,
                 wait=True
             )
-            print(f"Успішно завантажено {len(all_points_to_upsert)} точок в '{notebook_id}'.")
+            #print(f"Успішно завантажено {len(all_points_to_upsert)} точок в '{notebook_id}'.")
         
         return True
 
@@ -134,11 +134,11 @@ class RAGService:
             embedding = response.json().get('embedding', {})
             return embedding.get('values', [])
         except requests.exceptions.HTTPError as http_err:
-            print(f"HTTP помилка при отриманні ембедингу запиту: {http_err}")
-            print(f"Відповідь: {response.text}")
+            #print(f"HTTP помилка при отриманні ембедингу запиту: {http_err}")
+            #print(f"Відповідь: {response.text}")
             return []
         except Exception as err:
-            print(f"Інша помилка: {err}")
+            #print(f"Інша помилка: {err}")
             return []
 
 
@@ -149,7 +149,7 @@ class RAGService:
         query_vector = self._get_embedding(query)
 
         if not query_vector:
-            print("Не вдалося отримати вектор для запиту.")
+            #print("Не вдалося отримати вектор для запиту.")
             return []
 
         search_results = self.client.query_points(
@@ -160,8 +160,8 @@ class RAGService:
         )
         
         # Спочатку подивимося на структуру результатів
-        print(f"Тип результату: {type(search_results)}")
-        print(f"Результат: {search_results}")
+        #print(f"Тип результату: {type(search_results)}")
+        #print(f"Результат: {search_results}")
         
         # Спробуємо різні варіанти обробки
         results = []
@@ -172,14 +172,12 @@ class RAGService:
                 if isinstance(point, tuple):
                     # Якщо це кортеж (зазвичай: (scored_point, score))
                     results.append({
-                        "text": point[0].payload.get("text", ""),
-                        "score": point[1]
+                        "text": point[0].payload.get("text", "")
                     })
                 else:
                     # Якщо це об'єкт
                     results.append({
                         "text": point.payload.get("text", ""),
-                        "score": point.score
                     })
         else:
             # Якщо search_results - це безпосередньо список
@@ -187,12 +185,10 @@ class RAGService:
                 if isinstance(item, tuple):
                     results.append({
                         "text": item[0].payload.get("text", ""),
-                        "score": item[1]
                     })
                 else:
                     results.append({
                         "text": item.payload.get("text", ""),
-                        "score": item.score
                     })
         
         return results
@@ -201,6 +197,8 @@ class RAGService:
     def delete_notebook(self, notebook_id: str):
         if self.client.collection_exists(notebook_id):
             self.client.delete_collection(notebook_id)
-            print(f"Колекцію '{notebook_id}' видалено.")
+            #print(f"Колекцію '{notebook_id}' видалено.")
         else:
             raise ValueError(f"Колекція {notebook_id} не існує.")
+
+rag_service = RAGService()
