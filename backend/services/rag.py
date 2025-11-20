@@ -10,15 +10,34 @@ def batch_generator(data, batch_size):
         yield data[i:i + batch_size]
 
 class RAGService:
-    def __init__(self):
-        self.client = QdrantClient(":memory:")
-        self.api_key = ""
-        if not self.api_key:
-            raise ValueError("GEMINI_API_KEY не встановлено в змінних оточення.")
+    def __init__(self, embedding_provider: str = "gemini"):
+        """
+        Ініціалізує RAG сервіс з підтримкою Gemini або Hugging Face.
         
-        self.vector_size = 768
-        self.gemini_batch_limit = 100
-        self.gemini_embed_model = "gemini-embedding-001"
+        Args:
+            embedding_provider: "gemini" або "huggingface"
+        """
+        self.client = QdrantClient(":memory:")
+        self.embedding_provider = embedding_provider.lower()
+        
+        if self.embedding_provider == "gemini":
+            self.google_api_key = os.environ.get("GEMINI_API_KEY", "")
+            if not self.google_api_key:
+                raise ValueError("GEMINI_API_KEY не встановлено в змінних оточення.")
+            self.vector_size = 768
+            self.gemini_batch_limit = 100
+            self.gemini_embed_model = "gemini-embedding-001"
+        elif self.embedding_provider == "huggingface":
+            self.hf_token = os.environ.get("HF_TOKEN", "")
+            if not self.hf_token:
+                raise ValueError("HF_TOKEN не встановлено в змінних оточення.")
+            # Using granite-embedding-107m-multilingual which produces 768-dimensional embeddings
+            self.vector_size = 768
+            self.hf_batch_limit = 50  # Hugging Face may have different rate limits
+            self.hf_embed_model = "ibm-granite/granite-embedding-278m-multilingual"
+            self.hf_api_url = f"https://router.huggingface.co/hf-inference/models/{self.hf_embed_model}/pipeline/feature-extraction"
+        else:
+            raise ValueError(f"Невідомий провайдер ембедингів: {embedding_provider}. Використовуйте 'gemini' або 'huggingface'.")
 
 
     def create_notebook(self, notebook_id: str):
@@ -58,15 +77,33 @@ class RAGService:
             #print("Немає чанків для обробки.")
             return True
 
+        all_points_to_upsert = []
+        
+        if self.embedding_provider == "gemini":
+            all_points_to_upsert = self._insert_data_gemini(chunks)
+        elif self.embedding_provider == "huggingface":
+            all_points_to_upsert = self._insert_data_huggingface(chunks)
+
+        if all_points_to_upsert:
+            self.client.upsert(
+                collection_name=notebook_id,
+                points=all_points_to_upsert,
+                wait=True
+            )
+            #print(f"Успішно завантажено {len(all_points_to_upsert)} точок в '{notebook_id}'.")
+        
+        return True
+
+    def _insert_data_gemini(self, chunks: list[str]) -> list:
+        """Вставляє дані використовуючи Gemini embeddings."""
+        all_points_to_upsert = []
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_embed_model}:batchEmbedContents"
         headers = {
-            "x-goog-api-key": self.api_key,
+            "x-goog-api-key": self.google_api_key,
             "Content-Type": "application/json"
         }
 
-        all_points_to_upsert = [] 
         for chunk_batch in batch_generator(chunks, self.gemini_batch_limit):
-
             embedding_requests = []
             for chunk_text in chunk_batch:
                 embedding_requests.append({
@@ -101,25 +138,72 @@ class RAGService:
             except Exception as err:
                 #print(f"Інша помилка: {err}")
                 continue
-
-        if all_points_to_upsert:
-            self.client.upsert(
-                collection_name=notebook_id,
-                points=all_points_to_upsert,
-                wait=True
-            )
-            #print(f"Успішно завантажено {len(all_points_to_upsert)} точок в '{notebook_id}'.")
         
-        return True
+        return all_points_to_upsert
+
+    def _insert_data_huggingface(self, chunks: list[str]) -> list:
+        """Вставляє дані використовуючи Hugging Face embeddings."""
+        all_points_to_upsert = []
+        headers = {
+            "Authorization": f"Bearer {self.hf_token}",
+            "Content-Type": "application/json"
+        }
+
+        for chunk_batch in batch_generator(chunks, self.hf_batch_limit):
+            try:
+                # Hugging Face feature extraction API expects a list of texts
+                payload = {"inputs": chunk_batch}
+                response = requests.post(self.hf_api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                embeddings = response.json()
+                
+                # Hugging Face returns embeddings as a list of lists
+                if isinstance(embeddings, list) and len(embeddings) == len(chunk_batch):
+                    for chunk_text, embedding in zip(chunk_batch, embeddings):
+                        # Ensure embedding is a list of floats
+                        if isinstance(embedding, list):
+                            all_points_to_upsert.append(
+                                models.PointStruct(
+                                    id=str(uuid.uuid4()),
+                                    vector=embedding,
+                                    payload={"text": chunk_text}
+                                )
+                            )
+                else:
+                    # Handle different response formats
+                    print(f"Неочікуваний формат відповіді від Hugging Face: {type(embeddings)}")
+                    continue
+
+            except requests.exceptions.HTTPError as http_err:
+                print(f"HTTP помилка при отриманні ембедингів від Hugging Face: {http_err}")
+                print(f"Відповідь: {response.text}")
+                continue
+            except Exception as err:
+                print(f"Інша помилка при роботі з Hugging Face: {err}")
+                continue
+        
+        return all_points_to_upsert
 
     
     def _get_embedding(self, text: str) -> list[float]:
         """
         Допоміжна функція для отримання одного вектора для запиту.
+        Підтримує як Gemini, так і Hugging Face.
+        """
+        if self.embedding_provider == "gemini":
+            return self._get_gemini_embedding(text)
+        elif self.embedding_provider == "huggingface":
+            return self._get_huggingface_embedding(text)
+        else:
+            return []
+
+    def _get_gemini_embedding(self, text: str) -> list[float]:
+        """
+        Отримує ембединг використовуючи Gemini API.
         """
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_embed_model}:embedContent"
         headers = {
-            "x-goog-api-key": self.api_key,
+            "x-goog-api-key": self.google_api_key,
             "Content-Type": "application/json"
         }
         data = {
@@ -134,11 +218,42 @@ class RAGService:
             embedding = response.json().get('embedding', {})
             return embedding.get('values', [])
         except requests.exceptions.HTTPError as http_err:
-            #print(f"HTTP помилка при отриманні ембедингу запиту: {http_err}")
-            #print(f"Відповідь: {response.text}")
+            print(f"HTTP помилка при отриманні ембедингу запиту від Gemini: {http_err}")
+            print(f"Відповідь: {response.text}")
             return []
         except Exception as err:
-            #print(f"Інша помилка: {err}")
+            print(f"Інша помилка при роботі з Gemini: {err}")
+            return []
+
+    def _get_huggingface_embedding(self, text: str) -> list[float]:
+        """
+        Отримує ембединг використовуючи Hugging Face API.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.hf_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {"inputs": text}
+
+        try:
+            response = requests.post(self.hf_api_url, headers=headers, json=payload)
+            response.raise_for_status()
+            embedding = response.json()
+            
+            # Hugging Face returns a list of embeddings (even for single input)
+            if isinstance(embedding, list) and len(embedding) > 0:
+                return embedding[0] if isinstance(embedding[0], list) else embedding
+            elif isinstance(embedding, list):
+                return embedding
+            else:
+                print(f"Неочікуваний формат відповіді від Hugging Face: {type(embedding)}")
+                return []
+        except requests.exceptions.HTTPError as http_err:
+            print(f"HTTP помилка при отриманні ембедингу запиту від Hugging Face: {http_err}")
+            print(f"Відповідь: {response.text}")
+            return []
+        except Exception as err:
+            print(f"Інша помилка при роботі з Hugging Face: {err}")
             return []
 
 
@@ -201,4 +316,6 @@ class RAGService:
         else:
             raise ValueError(f"Колекція {notebook_id} не існує.")
 
-rag_service = RAGService()
+# Initialize RAG service with provider from environment variable (default: gemini)
+_embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "huggingface").lower()
+rag_service = RAGService(embedding_provider=_embedding_provider)
