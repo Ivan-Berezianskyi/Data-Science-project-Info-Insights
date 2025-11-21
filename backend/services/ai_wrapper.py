@@ -2,6 +2,7 @@ from services.groq_service import client
 from services.rag import rag_service
 from services.prompts import MAIN_LLM_SYSTEM, MAIN_LLM_USER, PRE_FETCH_LLM, PRE_FETCH_LLM_USER
 import json
+import json_repair
 
 MAIN_MODEL = "openai/gpt-oss-120b"
 PREFETCH_MODEL = "llama-3.1-8b-instant"
@@ -36,8 +37,8 @@ tools_schema = {
 }
 
 
-def prefetch(query: str):
-    rag_data = rag_service.search_data("test", query,3)
+def prefetch(query: str, keywords: list[str]):
+    rag_data = rag_service.search_data("test", f"{query} {keywords}",3)
     messages = [{
         "role" : "system",
         "content" : PRE_FETCH_LLM
@@ -49,21 +50,26 @@ def prefetch(query: str):
         model=PREFETCH_MODEL,
         messages=messages
     )
+    content=response.choices[0].message.content
     print("""
+### PREFETCH QUERY
+{query}
 
-### PREFETCH
+### PREFETCH RESPONSE
 {data}
 
-    """.format(data=response.choices[0].message.content))
-    return response.choices[0].message.content
+    """.format(query=f"{query} {keywords}",data=content))
+    response_data = json_repair.loads(content)["keywords"]
+    keywords[:] = response_data
+    return content
 
-def execute_chat(messages: list[dict]):
+def execute_chat(messages: list[dict], keywords: list[str]):
 
     new_messages = []
     to_send = [{"role": "system", "content": MAIN_LLM_SYSTEM}]+ messages[:-1] + [
             {
                 "role": "user",
-                "content": MAIN_LLM_USER.format(prefetch=prefetch(messages[-1]["content"]), user = messages[-1]["content"])
+                "content": MAIN_LLM_USER.format(prefetch=prefetch(messages[-1]["content"], keywords), user = messages[-1]["content"])
             }
         ]
     response = client.chat.completions.create(
@@ -71,8 +77,7 @@ def execute_chat(messages: list[dict]):
         messages=to_send,
         stream=False,
         tools=[tools_schema],
-        tool_choice="auto",
-        max_completion_tokens=4096,
+        tool_choice="auto"
     )
     response_message = response.choices[0].message
     tool_calls = response_message.tool_calls

@@ -252,13 +252,15 @@ BanQ: 0000051069 · BIBSYS: 7052330 · BLBNB: 000260377 · BNE: XX148293 · BNF:
 """)
 
 messages = []
+keywords = []
 while True:
     inp = input()
     messages.append({
         "role" : "user",
         "content": inp
     })
-    res = execute_chat(messages)
+    res = execute_chat(messages, keywords)
+    print(keywords)
     print("\n### RESPONSE\n{data}\n".format(data=res[-1]["content"]))
     for message in res:
         messages.append(message)
