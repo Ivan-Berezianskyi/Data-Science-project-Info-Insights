@@ -5,7 +5,7 @@ import json
 import json_repair
 
 MAIN_MODEL = "openai/gpt-oss-120b"
-PREFETCH_MODEL = "llama-3.1-8b-instant"
+PREFETCH_MODEL = "openai/gpt-oss-20b"
 
 
 def search_data(query: str, count: int = 5):
@@ -38,7 +38,7 @@ tools_schema = {
 
 
 def prefetch(query: str, keywords: list[str]):
-    rag_data = rag_service.search_data("test", f"{query} {keywords}",3)
+    rag_data = rag_service.search_data("test", f"{query} {keywords}",6)
     messages = [{
         "role" : "system",
         "content" : PRE_FETCH_LLM
@@ -59,17 +59,27 @@ def prefetch(query: str, keywords: list[str]):
 {data}
 
     """.format(query=f"{query} {keywords}",data=content))
-    response_data = json_repair.loads(content)["keywords"]
-    keywords[:] = response_data
-    return content
+    try:
+        res = json_repair.loads(content)
+        response_data = res["search_keywords"]
+        keywords[:] = response_data
+        return res
+    except:
+        return {
+            "score" : "FAILED_EXECUTING_PREFETCH",
+            "extracted_facts": []
+        }
+
+    
 
 def execute_chat(messages: list[dict], keywords: list[str]):
 
     new_messages = []
+    prefetch_res = prefetch(messages[-1]["content"], keywords)
     to_send = [{"role": "system", "content": MAIN_LLM_SYSTEM}]+ messages[:-1] + [
             {
                 "role": "user",
-                "content": MAIN_LLM_USER.format(prefetch=prefetch(messages[-1]["content"], keywords), user = messages[-1]["content"])
+                "content": MAIN_LLM_USER.format(prefetch={"score" : prefetch_res["score"], "extracted_facts": prefetch_res["extracted_facts"]}, user = messages[-1]["content"])
             }
         ]
     response = client.chat.completions.create(
