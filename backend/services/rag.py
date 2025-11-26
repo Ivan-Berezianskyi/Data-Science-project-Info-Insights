@@ -56,7 +56,10 @@ class RAGService:
             is_separator_regex=False,
         )
         chunks = text_splitter.split_text(data)
+        self.insert_split_data(notebook_id, chunks, source)
 
+    
+    def insert_split_data(self, notebook_id: str, chunks: list[str], source: str | None = None):
         if not chunks:
             return True
 
