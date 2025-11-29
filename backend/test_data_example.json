@@ -1,0 +1,27 @@
+[
+    {
+        "question": "How much force does the main propulsion system of the Falcon 9 generate?",
+        "ground_truth": "The Merlin engine produces approximately 845 kN of thrust at sea level.",
+        "notebooks": ["spacex"]
+    },
+    {
+        "question": "Why do nations collaborate on that giant orbiting laboratory?",
+        "ground_truth": "The purpose of the International Space Station (ISS) is for scientific research, international cooperation, and as a testbed for future space exploration.",
+        "notebooks": ["nasa"]
+    },
+    {
+        "question": "What is the tally of missions flown by Elon Musk's most common rocket?",
+        "ground_truth": "SpaceX has completed 475 Falcon 9 rocket launches as of May 14, 2025.",
+        "notebooks": ["spacex"]
+    },
+    {
+        "question": "Tell me about the project aiming to put boots back on the lunar surface.",
+        "ground_truth": "The Artemis program is NASA's program to return humans to the Moon, with the goal of establishing a sustainable human presence there by the late 2020s.",
+        "notebooks": ["nasa"]
+    },
+    {
+        "question": "What is the max cargo weight for the triple-core rocket?",
+        "ground_truth": "Falcon Heavy has the capability to carry over 63 tons of useful cargo.",
+        "notebooks": ["spacex"]
+    }
+]
