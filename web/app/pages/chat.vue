@@ -1,62 +1,61 @@
 <script setup lang="ts">
 import { Textarea } from '~/components/ui/textarea';
 import { Button } from '~/components/ui/button';
-import { Input } from '~/components/ui/input';
 import { SidebarInset } from '~/components/ui/sidebar';
-import type { Message } from '~/types/api';
-import { useMessages } from '~/composables/useMessages';
-import { useChats } from '~/composables/useChats';
+import MarkdownIt from 'markdown-it';
 
-const route = useRoute();
-const router = useRouter();
-const { getMessagesByChat, createMessage } = useMessages();
-const { getChat, createChat, updateChat } = useChats();
-
-// Get chat_id from query parameter
-const chatId = computed(() => {
-  const id = route.query.chat_id;
-  return id ? parseInt(id as string) : null;
+// Initialize MarkdownIt
+const md = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: true,
 });
+
+// Types
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface PrefetchContent {
+  [key: string]: any;
+}
+
+interface ToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+  response: string;
+}
 
 // State
 const messages = ref<Message[]>([]);
-const currentChat = ref<any>(null);
 const messageContent = ref('');
-const isLoading = ref(false);
 const isSending = ref(false);
 const error = ref<string | null>(null);
+const prefetchContent = ref<PrefetchContent | null>(null);
+const toolCalls = ref<ToolCall[]>([]);
 
-// Chat name editing state
-const isEditingName = ref(false);
-const editedChatName = ref('');
-const isUpdatingName = ref(false);
+// Notebooks state
+const availableNotebooks = ref<string[]>([]);
+const selectedNotebooks = ref<string[]>([]);
+const isLoadingNotebooks = ref(false);
 
-// Load chat and messages
-const loadChat = async () => {
-  if (!chatId.value) {
-    // No chat_id means we're starting a new chat
-    messages.value = [];
-    currentChat.value = null;
-    return;
-  }
+// Sidebar state
+const isSidebarOpen = ref(true);
 
-  isLoading.value = true;
-  error.value = null;
-
+// Load notebooks on mount
+onMounted(async () => {
+  isLoadingNotebooks.value = true;
   try {
-    // Load chat details
-    currentChat.value = await getChat(chatId.value);
-    
-    // Load messages
-    const response = await getMessagesByChat(chatId.value);
-    messages.value = response.items;
-  } catch (err: any) {
-    error.value = err.message || 'Failed to load chat';
-    console.error('Error loading chat:', err);
+    const notebooks = await $fetch<string[]>('http://localhost:8000/api/notebooks/');
+    availableNotebooks.value = notebooks;
+  } catch (err) {
+    console.error('Failed to load notebooks:', err);
   } finally {
-    isLoading.value = false;
+    isLoadingNotebooks.value = false;
   }
-};
+});
 
 // Send message
 const sendMessage = async () => {
@@ -67,46 +66,47 @@ const sendMessage = async () => {
   isSending.value = true;
   const content = messageContent.value.trim();
   messageContent.value = '';
+  error.value = null;
+
+  // Add user message to UI immediately
+  messages.value.push({ role: 'user', content });
 
   try {
-    let targetChatId = chatId.value;
+    // Prepare payload
+    const payload = {
+      messages: messages.value.map(m => ({ role: m.role, content: m.content })),
+      notebooks: selectedNotebooks.value
+    };
 
-    // If no chat exists, create one first
-    if (!targetChatId) {
-      const newChat = await createChat({
-        name: `Chat ${new Date().toLocaleDateString()}`,
-        notebooks: [],
-      });
-      targetChatId = newChat.id;
-      
-      // Update URL with new chat_id
-      router.replace({ path: '/chat', query: { chat_id: targetChatId } });
-      
-      // Update local state
-      currentChat.value = { ...newChat, messages_count: 0 };
-    }
-
-    // Create the message
-    const newMessage = await createMessage({
-      chat_id: targetChatId,
-      role: 'user',
-      content: content,
+    // Call API
+    const config = useRuntimeConfig();
+    const response = await $fetch<{ response: string; prefetch_content: any; tool_calls: any[] }>('http://localhost:8000/api/chat/completion', {
+      method: 'POST',
+      body: payload,
     });
+
+    // Add assistant message
+    messages.value.push({ role: 'assistant', content: response.response });
     
-    messages.value.push(newMessage);
-    
-    // Update message count
-    if (currentChat.value) {
-      currentChat.value.messages_count = messages.value.length;
+    // Update prefetch content
+    if (response.prefetch_content) {
+      prefetchContent.value = response.prefetch_content;
     }
     
-    // Scroll to bottom after sending
+    // Update tool calls
+    if (response.tool_calls) {
+      toolCalls.value = response.tool_calls;
+    } else {
+      toolCalls.value = [];
+    }
+    
+    // Scroll to bottom
     await nextTick();
     scrollToBottom();
   } catch (err: any) {
     error.value = err.message || 'Failed to send message';
     console.error('Error sending message:', err);
-    messageContent.value = content; // Restore message on error
+    // Optionally remove the user message or show error state
   } finally {
     isSending.value = false;
   }
@@ -120,23 +120,6 @@ const scrollToBottom = () => {
   }
 };
 
-// Watch for chat_id changes
-watch(() => route.query.chat_id, () => {
-  loadChat();
-}, { immediate: true });
-
-// Format date for display
-const formatDate = (dateString: string) => {
-  const date = new Date(dateString);
-  return date.toLocaleString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-};
-
 // Handle Enter key (Shift+Enter for new line, Enter to send)
 const handleKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -145,59 +128,26 @@ const handleKeyDown = (e: KeyboardEvent) => {
   }
 };
 
-// Start editing chat name
-const startEditingName = () => {
-  if (!chatId.value) return;
-  editedChatName.value = currentChat.value?.name || '';
-  isEditingName.value = true;
-  nextTick(() => {
-    const input = document.getElementById('chat-name-input') as HTMLInputElement;
-    if (input) {
-      input.focus();
-      input.select();
-    }
-  });
+// Render Markdown
+const renderMarkdown = (content: string) => {
+  return md.render(content);
 };
 
-// Save chat name
-const saveChatName = async () => {
-  if (!chatId.value || !currentChat.value || isUpdatingName.value) return;
-
-  const newName = editedChatName.value.trim();
-  
-  // If name is empty or unchanged, just cancel editing
-  if (!newName || newName === currentChat.value.name) {
-    isEditingName.value = false;
-    return;
+// Toggle notebook selection
+const toggleNotebook = (notebook: string) => {
+  if (selectedNotebooks.value.includes(notebook)) {
+    selectedNotebooks.value = selectedNotebooks.value.filter(n => n !== notebook);
+  } else {
+    selectedNotebooks.value.push(notebook);
   }
+};
 
-  isUpdatingName.value = true;
+// Helper to parse JSON safely
+const parseJson = (str: string) => {
   try {
-    const updatedChat = await updateChat(chatId.value, { name: newName });
-    currentChat.value.name = updatedChat.name;
-    isEditingName.value = false;
-  } catch (err: any) {
-    error.value = err.message || 'Failed to update chat name';
-    console.error('Error updating chat name:', err);
-  } finally {
-    isUpdatingName.value = false;
-  }
-};
-
-// Cancel editing chat name
-const cancelEditingName = () => {
-  isEditingName.value = false;
-  editedChatName.value = '';
-};
-
-// Handle Enter key in name input
-const handleNameInputKeyDown = (e: KeyboardEvent) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    saveChatName();
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    cancelEditingName();
+    return JSON.parse(str);
+  } catch (e) {
+    return str;
   }
 };
 </script>
@@ -205,54 +155,45 @@ const handleNameInputKeyDown = (e: KeyboardEvent) => {
 <template>
   <SidebarInset>
     <div class="w-full h-dvh flex flex-col">
-      <!-- Chat Header -->
+      <!-- Header -->
       <div class="border-b p-4 flex items-center justify-between pl-14">
-        <div class="flex-1 flex items-center gap-2">
-          <div v-if="!isEditingName" class="flex items-center gap-2">
-            <h2 class="text-xl font-bold">
-              {{ currentChat?.name || (chatId ? `Chat #${chatId}` : 'New Chat') }}
-            </h2>
-            <Button
-              v-if="chatId"
-              variant="ghost"
-              size="sm"
-              @click="startEditingName"
-              class="h-6 w-6 p-0"
-            >
-              <Icon size="16px" name="material-symbols:edit-outline" />
+        <h2 class="text-xl font-bold">AI Chat (MVP)</h2>
+        
+        <div class="flex items-center gap-2">
+          <!-- Notebook Selection Dropdown/List -->
+          <div class="relative group">
+            <Button variant="outline" size="sm" class="flex items-center gap-2">
+              <Icon name="material-symbols:library-books-outline" />
+              <span>Notebooks ({{ selectedNotebooks.length }})</span>
             </Button>
+            
+            <div class="absolute right-0 top-full mt-2 w-64 bg-white border rounded-lg shadow-lg p-2 z-50 hidden group-hover:block hover:block">
+              <div v-if="isLoadingNotebooks" class="text-center p-2 text-sm text-gray-500">
+                Loading notebooks...
+              </div>
+              <div v-else-if="availableNotebooks.length === 0" class="text-center p-2 text-sm text-gray-500">
+                No notebooks available
+              </div>
+              <div v-else class="max-h-60 overflow-y-auto space-y-1">
+                <div 
+                  v-for="notebook in availableNotebooks" 
+                  :key="notebook"
+                  class="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
+                  @click="toggleNotebook(notebook)"
+                >
+                  <div class="w-4 h-4 border rounded flex items-center justify-center" :class="selectedNotebooks.includes(notebook) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'">
+                    <Icon v-if="selectedNotebooks.includes(notebook)" name="material-symbols:check" class="text-white text-xs" />
+                  </div>
+                  <span class="text-sm truncate">{{ notebook }}</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <div v-else class="flex items-center gap-2 flex-1">
-            <Input
-              id="chat-name-input"
-              v-model="editedChatName"
-              @keydown="handleNameInputKeyDown"
-              @blur="saveChatName"
-              class="flex-1 max-w-md"
-              :disabled="isUpdatingName"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="saveChatName"
-              :disabled="isUpdatingName"
-              class="h-8"
-            >
-              <Icon size="16px" name="material-symbols:check" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="cancelEditingName"
-              :disabled="isUpdatingName"
-              class="h-8"
-            >
-              <Icon size="16px" name="material-symbols:close" />
-            </Button>
-          </div>
-          <p class="text-sm text-gray-500 ml-2" v-if="currentChat && !isEditingName">
-            {{ currentChat.messages_count }} messages
-          </p>
+          
+          <!-- Toggle Sidebar Button -->
+          <Button variant="ghost" size="sm" @click="isSidebarOpen = !isSidebarOpen">
+            <Icon :name="isSidebarOpen ? 'material-symbols:right-panel-close' : 'material-symbols:right-panel-open'" size="20px" />
+          </Button>
         </div>
       </div>
 
@@ -261,50 +202,112 @@ const handleNameInputKeyDown = (e: KeyboardEvent) => {
         {{ error }}
       </div>
 
-      <!-- Messages Container -->
-      <div
-        id="messages-container"
-        class="flex-1 overflow-y-auto p-4 space-y-4"
-      >
-        <!-- Loading State -->
-        <div v-if="isLoading" class="flex justify-center items-center h-full">
-          <p class="text-gray-500">Loading messages...</p>
-        </div>
-
-        <!-- Messages List -->
-        <div v-else-if="messages.length > 0" class="space-y-4">
-          <div
-            v-for="message in messages"
-            :key="message.id"
-            class="flex"
-            :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
-          >
+      <div class="flex-1 flex overflow-hidden">
+        <!-- Messages Container -->
+        <div
+          id="messages-container"
+          class="flex-1 overflow-y-auto p-4 space-y-4 transition-all duration-300"
+        >
+          <!-- Messages List -->
+          <div v-if="messages.length > 0" class="space-y-4">
             <div
-              class="max-w-[70%] rounded-lg p-3"
-              :class="
-                message.role === 'user'
-                  ? 'bg-blue-500 text-white'
-                  : message.role === 'ai'
-                  ? 'bg-gray-200 text-gray-900'
-                  : 'bg-yellow-100 text-yellow-900'
-              "
+              v-for="(message, index) in messages"
+              :key="index"
+              class="flex"
+              :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
             >
-              <div class="whitespace-pre-wrap">{{ message.content }}</div>
               <div
-                class="text-xs mt-1 opacity-70"
-                :class="message.role === 'user' ? 'text-white' : 'text-gray-600'"
+                class="max-w-[80%] rounded-lg p-3"
+                :class="
+                  message.role === 'user'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 text-gray-900'
+                "
               >
-                {{ formatDate(message.created_at) }}
+                <!-- Render Markdown for assistant, plain text for user (or markdown too if desired) -->
+                <div 
+                  v-if="message.role === 'assistant'" 
+                  class="prose prose-sm dark:prose-invert max-w-none"
+                  v-html="renderMarkdown(message.content)"
+                ></div>
+                <div v-else class="whitespace-pre-wrap">{{ message.content }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Empty State -->
+          <div v-else class="flex justify-center items-center h-full">
+            <div class="text-center">
+              <p class="text-2xl font-bold mb-4">Welcome!</p>
+              <p class="text-gray-500 mb-4">Start a conversation to see the magic happen.</p>
+              <div v-if="availableNotebooks.length > 0" class="text-sm text-gray-400">
+                Tip: Select notebooks from the top right menu to add context.
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Empty State -->
-        <div v-else class="flex justify-center items-center h-full">
-          <div class="text-center">
-            <p class="text-2xl font-bold mb-4">Дай Боже здоровʼя!</p>
-            <p class="text-gray-500">Start the conversation by sending a message!</p>
+        <!-- Context & Tools Sidebar (Right) -->
+        <div 
+          class="border-l bg-gray-50 overflow-y-auto transition-all duration-300 flex flex-col"
+          :class="isSidebarOpen ? 'w-96 p-4' : 'w-0 p-0 overflow-hidden border-none'"
+        >
+          <div class="space-y-6">
+            
+            <!-- Prefetch Section -->
+            <div v-if="prefetchContent && Object.keys(prefetchContent).length > 0">
+              <h3 class="font-bold mb-3 text-sm uppercase text-gray-500 flex items-center gap-2">
+                <Icon name="material-symbols:lightbulb-outline" />
+                Prefetch Context
+              </h3>
+              <div class="space-y-3">
+                <div v-for="(content, key) in prefetchContent" :key="key" class="bg-white border rounded-lg shadow-sm overflow-hidden">
+                  <div class="p-3 bg-gray-50 border-b font-semibold text-xs flex justify-between items-center">
+                    <span>{{ key }}</span>
+                  </div>
+                  <div class="p-3">
+                    <details class="text-xs">
+                      <summary class="cursor-pointer text-blue-600 hover:text-blue-800 mb-2">View Content</summary>
+                      <pre class="whitespace-pre-wrap overflow-x-auto bg-gray-50 p-2 rounded border">{{ JSON.stringify(content, null, 2) }}</pre>
+                    </details>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tool Calls Section -->
+            <div v-if="toolCalls.length > 0">
+              <h3 class="font-bold mb-3 text-sm uppercase text-gray-500 flex items-center gap-2">
+                <Icon name="material-symbols:build-outline" />
+                Tool Calls
+              </h3>
+              <div class="space-y-3">
+                <div v-for="tool in toolCalls" :key="tool.id" class="bg-white border rounded-lg shadow-sm overflow-hidden">
+                  <div class="p-3 bg-gray-50 border-b flex justify-between items-start">
+                    <div>
+                      <div class="font-semibold text-sm text-gray-800">{{ tool.name }}</div>
+                      <div class="text-xs text-gray-500 mt-1 font-mono break-all">
+                        {{ tool.arguments }}
+                      </div>
+                    </div>
+                  </div>
+                  <div class="p-3">
+                    <details class="text-xs">
+                      <summary class="cursor-pointer text-blue-600 hover:text-blue-800">View Result</summary>
+                      <div class="mt-2 bg-gray-50 p-2 rounded border overflow-x-auto">
+                        <pre class="whitespace-pre-wrap">{{ JSON.stringify(parseJson(tool.response), null, 2) }}</pre>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Empty State for Sidebar -->
+            <div v-if="(!prefetchContent || Object.keys(prefetchContent).length === 0) && toolCalls.length === 0" class="text-center text-gray-400 text-sm py-10">
+              No context or tool usage to display yet.
+            </div>
+
           </div>
         </div>
       </div>
@@ -324,11 +327,7 @@ const handleNameInputKeyDown = (e: KeyboardEvent) => {
             :disabled="!messageContent.trim() || isSending"
             class="h-[60px] px-6"
           >
-            <Icon
-              v-if="!isSending"
-              size="24px"
-              name="material-symbols:mode-comment-outline"
-            />
+            <span v-if="!isSending">Send</span>
             <span v-else>Sending...</span>
           </Button>
         </div>
@@ -336,3 +335,26 @@ const handleNameInputKeyDown = (e: KeyboardEvent) => {
     </div>
   </SidebarInset>
 </template>
+
+<style>
+/* Basic prose styling for markdown content if tailwind typography is not fully set up */
+.prose p {
+  margin-bottom: 0.5em;
+}
+.prose ul, .prose ol {
+  margin-left: 1.5em;
+  list-style-type: disc;
+}
+.prose pre {
+  background-color: #f3f4f6;
+  padding: 0.5em;
+  border-radius: 0.25em;
+  overflow-x: auto;
+}
+.prose code {
+  background-color: #f3f4f6;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25em;
+  font-family: monospace;
+}
+</style>

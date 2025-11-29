@@ -174,5 +174,14 @@ class RAGService:
                 texts.append(content)
         return texts
 
-
+    def list_notebooks(self) -> list[str]:
+        """
+        Повертає список всіх колекцій (блокнотів).
+        """
+        try:
+            collections = self.client.get_collections()
+            return [collection.name for collection in collections.collections]
+        except Exception as e:
+            print(f"Помилка при отриманні списку колекцій: {e}")
+            return []
 rag_service = RAGService()

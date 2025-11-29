@@ -5,9 +5,12 @@ from services.prompts import (
     PRE_FETCH_LLM,
     PRE_FETCH_LLM_USER,
     SUMMARY_MODEL_PROMT,
+    SEARCH_QUERY_OPTIMIZER,
+    SEARCH_QUERY_OPTIMIZER_USER,
 )
 import json
 import json_repair
+import tiktoken
 
 MAIN_MODEL = "gpt-4o"
 PREFETCH_MODEL = "gpt-3.5-turbo"
@@ -49,9 +52,37 @@ tools_schema = {
 
 
 def prefetch(query: str, keywords: list[str], notebooks: list[str]):
+    refinement_messages = [
+        {"role": "system", "content": SEARCH_QUERY_OPTIMIZER},
+        {
+            "role": "user", 
+            "content": SEARCH_QUERY_OPTIMIZER_USER.format(
+                user_query=query, 
+                keywords=", ".join(keywords) if keywords else "None"
+            )
+        }
+    ]
+    
+    try:
+        refinement_response = client.chat.completions.create(
+            model=PREFETCH_MODEL, 
+            messages=refinement_messages, 
+            temperature=0
+        )
+        refined_query = refinement_response.choices[0].message.content.strip()
+        print(f"Refined Query: {refined_query}")
+    except Exception as e:
+        print(f"Error refining query: {e}")
+        refined_query = query
+
+    logs = {
+        "refined_query": refined_query,
+        "notebooks": []
+    }
+
     output = []
     for notebook in notebooks:
-        rag_data = rag_service.search_data(notebook, f"{query} {",".join(keywords)}", 5)
+        rag_data = rag_service.search_data(notebook, refined_query, 10)
         messages = [
             {"role": "system", "content": PRE_FETCH_LLM},
             {
@@ -65,28 +96,37 @@ def prefetch(query: str, keywords: list[str], notebooks: list[str]):
             model=PREFETCH_MODEL, messages=messages, temperature=0
         )
         content = response.choices[0].message.content
-        print(
-            """
-### PREFETCH QUERY
-{query}
-
-### PREFETCH RESPONSE
-{data}
-        """.format(
-                query=f"{query} {keywords}", data=content
-            )
-        )
+        
+        notebook_log = {
+            "notebook": notebook,
+            "raw_response": content,
+            "rag_data_count": len(rag_data)
+        }
+        
+        notebook_log["input_tokens"] = response.usage.prompt_tokens
+        notebook_log["output_tokens"] = response.usage.completion_tokens
+        
         try:
             res = json_repair.loads(content)
-            response_data = res["search_keywords"]
+            response_data = res.get("suggested_search_keywords", [])
             keywords[:] = response_data
-            res.pop("search_keywords")
+            if "suggested_search_keywords" in res:
+                res.pop("suggested_search_keywords")
+            
             output.append({"notebook": notebook, "data": res})
-        except:
+            notebook_log["parsed_data"] = res
+            notebook_log["status"] = "success"
+        except Exception as e:
+            print(f"Error parsing response: {e}")
             output.append(
                 {"notebook": notebook, "data": {"score": "ERROR", "extracted_facts": []}}
             )
-    return output
+            notebook_log["status"] = "error"
+            notebook_log["error"] = str(e)
+            
+        logs["notebooks"].append(notebook_log)
+            
+    return output, logs
 
 def summarize_notebooks(notebooks: list[str]):
     output = ""
@@ -100,10 +140,17 @@ def summarize_notebooks(notebooks: list[str]):
 
 
 def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]):
+    execution_logs = {
+        "prefetch": {},
+        "main_llm": []
+    }
     new_messages = []
     
-    prefetch_res = prefetch(messages[-1]["content"], keywords, notebooks)
-    print(prefetch_res)
+    prefetch_res, prefetch_logs = prefetch(messages[-1]["content"], keywords, notebooks)
+    execution_logs["prefetch"] = prefetch_logs
+    
+    encoding = tiktoken.get_encoding("cl100k_base")
+    execution_logs["prefetch_content_tokens"] = len(encoding.encode(str(prefetch_res)))
     
     system_message = messages[0]
     history = messages[1:-1]
@@ -116,6 +163,7 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
             user=last_user_content,
         ),
     }
+    execution_logs["input"] = formatted_last_msg
 
     to_send = [system_message] + history + [formatted_last_msg]
 
@@ -126,17 +174,29 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
         tools=[tools_schema],
         tool_choice="auto",
     )
+    execution_logs["tool_tokens"] = 0
+    encoding = tiktoken.get_encoding("cl100k_base")
     
-    response_message = response.choices[0].message
-    tool_calls = response_message.tool_calls
+    while True:
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
 
-    to_send.append(response_message)
-    
-    if not tool_calls:
-        new_messages.append({"role": "assistant", "content": response_message.content})
-        return new_messages
+        to_send.append(response_message)
+        
+        # Log the assistant's turn
+        turn_log = {
+            "role": "assistant",
+            "content": response_message.content,
+            "tool_calls": []
+        }
+        
+        if not tool_calls:
+            # No tool calls = final response
+            new_messages.append({"role": "assistant", "content": response_message.content})
+            execution_logs["main_llm"].append(turn_log)
+            return new_messages, execution_logs
 
-    if tool_calls:
+        # Process tool calls
         print(f"Tool calls triggered: {len(tool_calls)}")
         
         available_functions = {
@@ -146,6 +206,13 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
         for tool_call in tool_calls:
             function_name = tool_call.function.name
             function_to_call = available_functions.get(function_name)
+            
+            tool_call_log = {
+                "id": tool_call.id,
+                "name": function_name,
+                "arguments": tool_call.function.arguments,
+                "response": None
+            }
             
             if function_to_call:
                 try:
@@ -160,6 +227,8 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
                 except Exception as e:
                     function_response = json.dumps({"error": str(e)})
 
+                tool_call_log["response"] = function_response
+                
                 to_send.append(
                     {
                         "tool_call_id": tool_call.id,
@@ -168,13 +237,18 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
                         "content": function_response,
                     }
                 )
+            
+            turn_log["tool_calls"].append(tool_call_log)
+            execution_logs["tool_tokens"] += len(encoding.encode(function_response))
 
-        second_response = client.chat.completions.create(
-            model=MAIN_MODEL, 
-            messages=to_send
+        execution_logs["main_llm"].append(turn_log)
+
+        # Call LLM again with tool results
+        response = client.chat.completions.create(
+            model=MAIN_MODEL,
+            messages=to_send,
+            stream=False,
+            tools=[tools_schema],
+            tool_choice="auto",
         )
-        
-        final_content = second_response.choices[0].message.content
-        new_messages.append({"role": "assistant", "content": final_content})
-
-    return new_messages
+        # Loop continues to check if the new response has tool calls or is final
