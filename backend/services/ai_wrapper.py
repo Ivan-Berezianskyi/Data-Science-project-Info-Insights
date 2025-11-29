@@ -52,7 +52,6 @@ tools_schema = {
 
 
 def prefetch(query: str, keywords: list[str], notebooks: list[str]):
-    # Refine the search query to avoid hallucinations from old keywords
     refinement_messages = [
         {"role": "system", "content": SEARCH_QUERY_OPTIMIZER},
         {
@@ -104,6 +103,9 @@ def prefetch(query: str, keywords: list[str], notebooks: list[str]):
             "rag_data_count": len(rag_data)
         }
         
+        notebook_log["input_tokens"] = response.usage.prompt_tokens
+        notebook_log["output_tokens"] = response.usage.completion_tokens
+        
         try:
             res = json_repair.loads(content)
             response_data = res.get("suggested_search_keywords", [])
@@ -113,8 +115,6 @@ def prefetch(query: str, keywords: list[str], notebooks: list[str]):
             
             output.append({"notebook": notebook, "data": res})
             notebook_log["parsed_data"] = res
-            notebook_log["input_tokens"] = response.usage.prompt_tokens
-            notebook_log["output_tokens"] = response.usage.completion_tokens
             notebook_log["status"] = "success"
         except Exception as e:
             print(f"Error parsing response: {e}")
@@ -148,6 +148,9 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
     
     prefetch_res, prefetch_logs = prefetch(messages[-1]["content"], keywords, notebooks)
     execution_logs["prefetch"] = prefetch_logs
+    
+    encoding = tiktoken.get_encoding("cl100k_base")
+    execution_logs["prefetch_content_tokens"] = len(encoding.encode(str(prefetch_res)))
     
     system_message = messages[0]
     history = messages[1:-1]
@@ -188,68 +191,64 @@ def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]
         }
         
         if not tool_calls:
+            # No tool calls = final response
             new_messages.append({"role": "assistant", "content": response_message.content})
             execution_logs["main_llm"].append(turn_log)
             return new_messages, execution_logs
 
-        if tool_calls:
-            print(f"Tool calls triggered: {len(tool_calls)}")
+        # Process tool calls
+        print(f"Tool calls triggered: {len(tool_calls)}")
+        
+        available_functions = {
+            "search_data": search_data,
+        }
+
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            function_to_call = available_functions.get(function_name)
             
-            available_functions = {
-                "search_data": search_data,
+            tool_call_log = {
+                "id": tool_call.id,
+                "name": function_name,
+                "arguments": tool_call.function.arguments,
+                "response": None
             }
-
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_to_call = available_functions.get(function_name)
-                
-                tool_call_log = {
-                    "id": tool_call.id,
-                    "name": function_name,
-                    "arguments": tool_call.function.arguments,
-                    "response": None
-                }
-                
-                if function_to_call:
-                    try:
-                        function_args = json.loads(tool_call.function.arguments)
-                        
-                        function_response = function_to_call(
-                            query=function_args.get("query"), 
-                            notebook=function_args.get("notebook")
-                        )
-                    except json.JSONDecodeError:
-                        function_response = json.dumps({"error": "Invalid JSON arguments from model"})
-                    except Exception as e:
-                        function_response = json.dumps({"error": str(e)})
-
-                    tool_call_log["response"] = function_response
-                    
-                    to_send.append(
-                        {
-                            "tool_call_id": tool_call.id,
-                            "role": "tool",
-                            "name": function_name,
-                            "content": function_response,
-                        }
-                    )
-                
-                turn_log["tool_calls"].append(tool_call_log)
-                execution_logs["tool_tokens"] += len(encoding.encode(function_response))
-
-            execution_logs["main_llm"].append(turn_log)
-
-            response = client.chat.completions.create(
-                model=MAIN_MODEL,
-                messages=to_send,
-                stream=False,
-                tools=[tools_schema],
-                tool_choice="auto",
-            )
-        else:
-            break
             
-    final_content = response.choices[0].message.content
-    new_messages.append({"role": "assistant", "content": final_content})
-    
-    return new_messages, execution_logs
+            if function_to_call:
+                try:
+                    function_args = json.loads(tool_call.function.arguments)
+                    
+                    function_response = function_to_call(
+                        query=function_args.get("query"), 
+                        notebook=function_args.get("notebook")
+                    )
+                except json.JSONDecodeError:
+                    function_response = json.dumps({"error": "Invalid JSON arguments from model"})
+                except Exception as e:
+                    function_response = json.dumps({"error": str(e)})
+
+                tool_call_log["response"] = function_response
+                
+                to_send.append(
+                    {
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": function_response,
+                    }
+                )
+            
+            turn_log["tool_calls"].append(tool_call_log)
+            execution_logs["tool_tokens"] += len(encoding.encode(function_response))
+
+        execution_logs["main_llm"].append(turn_log)
+
+        # Call LLM again with tool results
+        response = client.chat.completions.create(
+            model=MAIN_MODEL,
+            messages=to_send,
+            stream=False,
+            tools=[tools_schema],
+            tool_choice="auto",
+        )
+        # Loop continues to check if the new response has tool calls or is final

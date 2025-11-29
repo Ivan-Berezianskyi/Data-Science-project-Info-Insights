@@ -345,7 +345,7 @@ Response: [Full structured report with sections, 1500+ words, complete bibliogra
 </notebook_summary>
 """
 
-PRE_FETCH_LLM = PREFETCH_SYSTEM_PROMPT = """
+PRE_FETCH_LLM = """
 ### ROLE
 You are a **Strict Data Extraction Engine** for a RAG system's prefetch phase. Your only job is to extract relevant facts from provided context chunks and assess their quality.
 

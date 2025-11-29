@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from routers import chats, messages
+from routers import chats, messages, chat_completion, notebooks
 
 # To initialize database tables, run: python init_database.py
 # Or use Alembic migrations for production
@@ -24,6 +24,8 @@ app.add_middleware(
 # Include routers
 app.include_router(chats.router)
 app.include_router(messages.router)
+app.include_router(chat_completion.router)
+app.include_router(notebooks.router)
 
 
 @app.get("/")
