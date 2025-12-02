@@ -20,9 +20,9 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # --- Local Service Imports ---
 sys.path.append(os.getcwd())
 
-from services.ai_wrapper import execute_chat, summarize_notebooks
+from services.ai_wrapper import execute_chat, summarize_notebooks, prefetch
 from services.rag import rag_service
-from services.prompts import MAIN_LLM_SYSTEM, PRE_FETCH_LLM, PRE_FETCH_LLM_USER
+from services.prompts import MAIN_LLM_SYSTEM
 
 # === НАЛАШТУВАННЯ ЯК НА ПРОДАКШНІ ===
 PRODUCTION_MODEL = "gpt-3.5-turbo"
@@ -33,107 +33,53 @@ def load_test_data(file_path: str) -> List[Dict[str, Any]]:
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def emulate_production_prefetch(question: str, notebook_id: str, llm) -> str:
-    """
-    Повна імітація логіки prefetch з ai_wrapper.py:
-    1. Пошук (Raw)
-    2. Аналіз через GPT-3.5 (використовуючи REAL prompts)
-    3. Витягування search_keywords
-    """
-    # 1. Початковий "грубий" пошук (як в prefetch функції)
-    try:
-        initial_context = rag_service.search_data(notebook_id, question, limit=PRODUCTION_LIMIT)
-    except Exception:
-        return ""
-
-    if not initial_context:
-        return ""
-
-    # 2. Формування промпта (ТОЧНО як в ai_wrapper.py)
-    messages = [
-        {"role": "system", "content": PRE_FETCH_LLM},
-        {
-            "role": "user", 
-            "content": PRE_FETCH_LLM_USER.format(
-                user_query=question, 
-                result=json.dumps(initial_context)
-            )
-        }
-    ]
-
-    # 3. Виклик LLM
-    try:
-        response = llm.invoke(messages)
-        content = response.content
-        
-        # 4. Спроба розпарсити JSON (спрощена, без json_repair щоб не тягнути зайві ліби, але надійна)
-        # Шукаємо початок JSON об'єкта
-        start_idx = content.find('{')
-        end_idx = content.rfind('}') + 1
-        if start_idx != -1 and end_idx != -1:
-            json_str = content[start_idx:end_idx]
-            data = json.loads(json_str)
-            keywords = data.get("search_keywords", [])
-            return " ".join(keywords)
-    except Exception as e:
-        print(f"   [Warning] Prefetch JSON parse error: {e}")
-        return ""
-    
-    return ""
-
 def run_rag_query(question: str, notebooks: List[str], mode: str) -> Dict[str, Any]:
-    # Використовуємо GPT-3.5 (Realism)
-    llm = ChatOpenAI(model=PRODUCTION_MODEL, temperature=0)
+    """
+    Run a RAG query using the actual ai_wrapper functions.
+    """
+    keywords = []
     
-    search_keywords_map = {} # Зберігаємо ключі для кожного нотбука окремо
-    
-    # --- ЛОГІКА ПОШУКУ ---
-    if mode == "prefetch":
-        print(f"   [Mode: PREFETCH (Prod Sim)] Analyzing...")
-        # Для кожного нотбука генеруємо свої ключі (як в ai_wrapper)
-        for nb in notebooks:
-            keys = emulate_production_prefetch(question, nb, llm)
-            search_keywords_map[nb] = keys
-            if keys:
-                print(f"      └─ [{nb}] Keys: {keys}")
-    else:
-        print(f"   [Mode: RAW] Using raw question")
-    # ---------------------
-
     # 1. Виклик Бота (Execute Chat)
-    # Збираємо всі ключі в один список для бота
-    all_keywords_list = list(filter(None, search_keywords_map.values()))
-    
     notebook_summary = summarize_notebooks(notebooks)
     messages = [
         {"role": "system", "content": MAIN_LLM_SYSTEM.format(notebook_summary=notebook_summary)},
         {"role": "user", "content": question}
     ]
     
-    # Бот отримує ключі, щоб сформувати відповідь
-    response_messages = execute_chat(messages, all_keywords_list, notebooks)
-    answer = response_messages[-1]["content"] if response_messages else ""
+    print(f"   [Execute Chat] Running pipeline for: {question[:50]}...")
     
-    # 2. Збір Контексту для RAGAS
-    # Тут ми емулюємо "Final Search" з prefetch()
+    # Бот отримує ключі, щоб сформувати відповідь
+    # execute_chat handles prefetch internally based on mode
+    prefetch_enabled = (mode == "prefetch")
+    new_messages, execution_logs = execute_chat(messages, keywords, notebooks, prefetch_enabled=prefetch_enabled)
+    
+    answer = ""
+    if new_messages:
+        answer = new_messages[-1]["content"]
+    
+    # 2. Збір Контексту з логів виконання (Context Retrieval from Execution Logs)
     all_contexts = []
     
-    for notebook in notebooks:
-        try:
-            if mode == "prefetch":
-                keys = search_keywords_map.get(notebook, "")
-                # ЛОГІКА ПРОДАКШНУ: "query + keywords"
-                final_query = f"{question} {keys}".strip()
-            else:
-                final_query = question
-
-            # PRODUCTION LIMIT (5)
-            contexts = rag_service.search_data(notebook, final_query, limit=PRODUCTION_LIMIT)
-            all_contexts.extend([ctx["text"] for ctx in contexts])
-            
-        except Exception as e:
-            print(f"   [Warning] Error searching '{notebook}': {e}")
-            all_contexts.append("")
+    # Extract contexts from tool calls in main_llm logs
+    if "main_llm" in execution_logs:
+        for turn in execution_logs["main_llm"]:
+            if "tool_calls" in turn:
+                for tool_call in turn["tool_calls"]:
+                    if tool_call["name"] == "search_data" and tool_call.get("response"):
+                        try:
+                            # Parse the double-encoded JSON response
+                            # response is string: '{"result": ["[{...}]"]}'
+                            response_obj = json.loads(tool_call["response"])
+                            result_list = response_obj.get("result", [])
+                            
+                            for result_str in result_list:
+                                # result_str is string: '[{...}]'
+                                items = json.loads(result_str)
+                                for item in items:
+                                    if isinstance(item, dict) and "text" in item:
+                                        all_contexts.append(item["text"])
+                        except Exception as e:
+                            print(f"   [Warning] Error parsing tool response: {e}")
 
     return {
         "answer": answer,
@@ -194,7 +140,7 @@ def evaluate_with_ragas(dataset: Dataset, output_file: str) -> pd.DataFrame:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--test-data", type=str, required=True)
-    parser.add_argument("--notebooks", nargs="+", default=["nasa", "spacex"])
+    parser.add_argument("--notebooks", nargs="+", default=["discrete_math"])
     parser.add_argument("--output", type=str, default="ragas_results.csv")
     parser.add_argument("--mode", choices=["prefetch", "raw"], default="prefetch")
     

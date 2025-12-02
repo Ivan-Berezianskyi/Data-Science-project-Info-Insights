@@ -5,8 +5,6 @@ import { SidebarProvider } from '@/components/ui/sidebar'
 <template>
   <div class="w-full h-dvh">
     <SidebarProvider>
-      <AppSidebar />
-      <FixedSidebarTrigger />
       <slot />
     </SidebarProvider>
   </div>

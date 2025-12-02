@@ -16,7 +16,7 @@ MAIN_MODEL = "gpt-4o"
 PREFETCH_MODEL = "gpt-3.5-turbo"
 
 
-def search_data(notebook: str, query: str, count: int = 8):
+def search_data(notebook: str, query: str, count: int = 5):
     print(f"\n\n**MAIN LLM SEARCH QUERY**: ({notebook}) {query}")
     res = []
     try:
@@ -139,15 +139,19 @@ def summarize_notebooks(notebooks: list[str]):
     return output
 
 
-def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str]):
+def execute_chat(messages: list[dict], keywords: list[str], notebooks: list[str], prefetch_enabled: bool = True):
     execution_logs = {
         "prefetch": {},
         "main_llm": []
     }
     new_messages = []
     
-    prefetch_res, prefetch_logs = prefetch(messages[-1]["content"], keywords, notebooks)
-    execution_logs["prefetch"] = prefetch_logs
+    if prefetch_enabled:
+        prefetch_res, prefetch_logs = prefetch(messages[-1]["content"], keywords, notebooks)
+        execution_logs["prefetch"] = prefetch_logs
+    else:
+        prefetch_res = []
+        execution_logs["prefetch"] = {}
     
     encoding = tiktoken.get_encoding("cl100k_base")
     execution_logs["prefetch_content_tokens"] = len(encoding.encode(str(prefetch_res)))

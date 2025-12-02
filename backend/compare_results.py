@@ -63,7 +63,7 @@ def generate_chart(df):
         rects2 = ax.bar(x + width/2, df['Optimized'], width, label='Prefetch (Prod Sim)', color='#2ca02c', alpha=0.9)
 
         ax.set_ylabel('Score (0.0 - 1.0)')
-        ax.set_title('Production Simulation: Raw vs Prefetch (GPT-3.5 + Limit 5)')
+        ax.set_title('Production Simulation: Raw (GPT-4o) vs Prefetch (GPT-3.5 + GPT-4o + Limit 5)')
         ax.set_xticks(x)
         ax.set_xticklabels(labels)
         ax.legend(loc='lower right')
